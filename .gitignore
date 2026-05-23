@@ -1,0 +1,17 @@
+# Pixi environment
+.pixi/
+
+# Build artifacts
+docs/_build/
+dist/
+build/
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated examples (regenerate with `pixi run currents` / `pixi run convert-example`)
+examples/currents.png
+example_data/*.nc
