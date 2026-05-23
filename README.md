@@ -36,11 +36,24 @@ ds_avg = ds.coarsen(time=5, boundary="trim").mean()
 ds_avg.to_netcdf("Bark26004r_avg5.nc")
 ```
 
-CLI:
+CLI — single file or batch:
 
 ```sh
+# One file (default output: in.000 -> in.nc)
+py_rdradcp-convert example_data/Bark26004r.000
+
+# Explicit output path
 py_rdradcp-convert example_data/Bark26004r.000 out.nc
+
+# Whole directory via shell glob; one .nc next to each source
+py_rdradcp-convert example_data/*r.000
+
+# Or collect all outputs into a target directory
+py_rdradcp-convert example_data/*r.000 -o nc/
 ```
+
+With multiple inputs the CLI keeps going past failures and exits
+non-zero if any file failed.
 
 ## Scope and disparities with rdradcp.m
 
