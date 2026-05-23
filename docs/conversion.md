@@ -14,11 +14,23 @@ Writing netCDF needs the `netcdf4` package: `pip install 'py_rdradcp[netcdf]'`
 ## CLI
 
 ```bash
+# Single file
 py_rdradcp-convert in.000                       # -> in.nc
 py_rdradcp-convert in.000 out.nc
+
+# Single file, options
 py_rdradcp-convert in.000 out.nc --nens 1000    # first 1000 ensembles only
 py_rdradcp-convert old.000 --century 1900       # base century for old fw
+
+# Whole directory: shell glob, .nc written next to each source
+py_rdradcp-convert data/*r.000
+
+# Or collect the output into a target directory
+py_rdradcp-convert data/*r.000 -o nc/
 ```
+
+With multiple inputs the CLI keeps going past failures and reports a
+summary at the end; it exits non-zero if any file failed.
 
 ## From Python
 
