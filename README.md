@@ -63,8 +63,11 @@ new entries in the per-block dispatch table.
   - `0x0400` percent good
   - `0x0500` status
   - `0x0600` bottom track (range, velocity, correlation, amplitude, %good)
-  - `0x2100`-`0x2104` WinRiver raw NMEA sentences (only `$..GGA` is
-    parsed for UTC seconds, latitude, longitude)
+  - `0x2100`-`0x2104` WinRiver v1 raw NMEA sentences. `$..GGA` ->
+    UTC/latitude/longitude; `$..VTG` -> course over ground & speed (kt);
+    `$..HDT` -> true heading. DBT and GSA are skipped.
+  - `0x2022` WinRiver II NMEA: binary GGA (specID 100, 104), binary HDT
+    (103, 107), and raw ASCII GGA (204).
 - Returns an `xarray.Dataset` keyed by `time`, `cell`, `beam`, with
   configuration exposed as dataset attributes.
 - Resyncs over bad bytes between ensembles by searching for the next
@@ -80,7 +83,8 @@ These are intentional gaps relative to `rdradcp.m`:
   simple.
 - **No VMDAS binary navigation block** (`0x2000`) decoding. The block
   is skipped; `nav_*` variables will not be populated for VMDAS files.
-- **No WinRiver II** (`0x2022`) NMEA decoding.
+- **WinRiver II** (`0x2022`) covers only GGA and HDT sub-messages;
+  VTG/DBT and rare specIDs are not parsed.
 - **No Sentinel-V 5-beam blocks** (`0x0F01`, `0x0A00`, `0x0B00`,
   `0x0C00`). They are silently skipped.
 - **No OS-ADCP / NB / Ocean Surveyor specific variants** (the variable

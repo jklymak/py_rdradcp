@@ -20,7 +20,8 @@ cleaner subset and is meant to be extended one block at a time.
   | `0x0400` | Percent good                     |
   | `0x0500` | Status                           |
   | `0x0600` | Bottom track                     |
-  | `0x2100`-`0x2104` | WinRiver raw NMEA (GPGGA parsed for time/lat/lon) |
+  | `0x2100`-`0x2104` | WinRiver v1 raw NMEA: GGA (time/lat/lon), VTG (course/speed), HDT (heading) parsed |
+  | `0x2022` | WinRiver II NMEA: binary GGA (specID 100/104), binary HDT (103/107), and raw ASCII GGA (204) parsed |
 - Returns an {py:class}`xarray.Dataset` keyed by ``time``, ``cell``,
   ``beam``, with configuration as dataset attributes.
 - Resyncs over corrupt bytes between ensembles by searching for the next
@@ -39,7 +40,12 @@ corresponding variables will be missing or only partially populated.
   the reader simple.
 - **No VMDAS binary navigation block** (`0x2000`) decoding. Block is
   skipped; `nav_*` variables not populated for VMDAS files.
-- **No WinRiver II** (`0x2022`) NMEA decoding.
+- **WinRiver II** (`0x2022`) decoding covers GGA and HDT only; VTG / DBT
+  and the rare specIDs (4, 5, 101-102, 105-106, 200, 205-207) are not
+  implemented (these blocks are still skipped cleanly so the rest of the
+  ensemble parses).
+- **GSA / DBT NMEA sentences** are not parsed (DOP and depth-below-
+  transducer info). The blocks are skipped cleanly.
 - **No Sentinel-V 5-beam blocks** (`0x0F01`, `0x0A00`, `0x0B00`,
   `0x0C00`).
 - **No OS-ADCP / NB / Ocean Surveyor variable-leader trailers** (the

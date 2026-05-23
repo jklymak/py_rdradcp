@@ -35,6 +35,22 @@ def test_read_large_winriver():
     assert "nav_latitude" in ds
 
 
+@pytest.mark.skipif(not LARGE_FILE.exists(), reason="example file missing")
+def test_winriver_nmea_fields():
+    ds = read_pd0(LARGE_FILE)
+    # GGA: lat ~ 48.8 N, lon ~ -125 (Barkley Sound)
+    assert np.isfinite(ds["nav_latitude"].values).all()
+    assert 48 < float(ds["nav_latitude"].mean()) < 49
+    assert -126 < float(ds["nav_longitude"].mean()) < -125
+    # VTG: course/speed populated from 0x2102 NMEA block
+    assert "nav_course_true" in ds
+    assert "nav_speed" in ds
+    assert np.isfinite(ds["nav_course_true"].values).any()
+    # UTC seconds should be in [0, 86400)
+    sec = ds["nav_seconds_utc"].values
+    assert ((sec >= 0) & (sec < 86400)).all()
+
+
 @pytest.mark.skipif(not SMALL_FILE.exists(), reason="example file missing")
 def test_nens_limit():
     ds_full = read_pd0(SMALL_FILE)

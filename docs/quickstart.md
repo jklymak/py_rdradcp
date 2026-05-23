@@ -65,7 +65,9 @@ Data variables:
     bt_correlation   (time, beam)
     bt_amplitude     (time, beam)
     bt_percent_good  (time, beam)
-    nav_latitude, nav_longitude, nav_seconds_utc      (time)   # WinRiver
+    nav_latitude, nav_longitude, nav_seconds_utc      (time)   # GGA
+    nav_course_true, nav_speed                         (time)   # VTG (knots)
+    nav_heading_true                                   (time)   # HDT (if present)
 Attributes:
     source_file, instrument, firmware_version, sourceprog,
     beam_angle_deg, beam_frequency_khz, beam_pattern, orientation,

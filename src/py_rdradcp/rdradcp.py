@@ -334,16 +334,15 @@ def _parse_bottom_track(fd: BinaryIO) -> dict:
     }
 
 
-# WinRiver NMEA blocks: payloads are ASCII NMEA sentences padded out to a
-# fixed length (the length itself varies between firmware versions; we use
-# the header offsets to find the block end). We only parse $..GGA for
-# time/lat/lon; other sentences are ignored.
+# NMEA parsers. WinRiver (v1) blocks 0x2100-0x2104 each carry one raw ASCII
+# NMEA sentence padded out to a fixed length; the length varies between
+# firmware versions so we always parse to the block-end boundary set by the
+# enclosing ensemble header. WinRiver2 (0x2022) wraps either an internal
+# binary representation of a sentence (specID 100/104=GGA, 103/107=HDT) or
+# a raw NMEA string (specID 204=GGA), with a 12-byte sub-header.
 
-def _nmea_gga(payload: bytes) -> dict:
-    try:
-        text = payload.decode("ascii", errors="ignore")
-    except Exception:
-        return {}
+
+def _nmea_gga(text: str) -> dict:
     idx = text.find("GGA,")
     if idx < 0:
         return {}
@@ -382,6 +381,125 @@ def _nmea_gga(payload: bytes) -> dict:
             out["nav_longitude"] = lon
     except (ValueError, IndexError):
         pass
+    return out
+
+
+def _nmea_vtg(text: str) -> dict:
+    """Parse a $..VTG sentence: course over ground (true) and speed (knots)."""
+    idx = text.find("VTG,")
+    if idx < 0:
+        return {}
+    fields = text[idx + 4:].split(",")
+    out: dict[str, Any] = {}
+    # Field order: course_true, 'T', course_mag, 'M', speed_kts, 'N',
+    #              speed_kmh, 'K', mode
+    if len(fields) >= 1 and fields[0]:
+        try:
+            out["nav_course_true_deg"] = float(fields[0])
+        except ValueError:
+            pass
+    if len(fields) >= 5 and fields[4]:
+        try:
+            out["nav_speed_kts"] = float(fields[4])
+        except ValueError:
+            pass
+    return out
+
+
+def _nmea_hdt(text: str) -> dict:
+    """Parse a $..HDT sentence: true heading."""
+    idx = text.find("HDT,")
+    if idx < 0:
+        return {}
+    fields = text[idx + 4:].split(",")
+    if fields and fields[0]:
+        try:
+            return {"nav_heading_true_deg": float(fields[0])}
+        except ValueError:
+            pass
+    return {}
+
+
+def _parse_winriver_nmea(bid: int, payload: bytes) -> dict:
+    """Dispatch a WinRiver-v1 NMEA block (0x2100-0x2104) to a sentence parser."""
+    try:
+        text = payload.decode("ascii", errors="ignore")
+    except Exception:
+        return {}
+    if bid == 0x2101:
+        return _nmea_gga(text)
+    if bid == 0x2102:
+        return _nmea_vtg(text)
+    if bid == 0x2104:
+        return _nmea_hdt(text)
+    # 0x2100 (DBT), 0x2103 (GSA) currently not decoded.
+    return {}
+
+
+def _parse_winriver2_block(payload: bytes) -> dict:
+    """Parse a WinRiver2 NMEA block (0x2022).
+
+    Layout: uint16 specID, int16 msgsiz, double deltaT, then a specID-dependent
+    payload. specIDs 100/104 are internal binary GGA, 103/107 are internal
+    binary HDT, 204 is a raw $..GGA NMEA string. Other specIDs are skipped.
+    """
+    if len(payload) < 12:
+        return {}
+    spec_id, msgsize = struct.unpack_from("<Hh", payload, 0)
+    body = payload[12:12 + max(msgsize, 0)] if msgsize > 0 else payload[12:]
+    out: dict[str, Any] = {}
+
+    def _gga_from_binary(body: bytes, prefix_len: int) -> dict:
+        # prefix_len ASCII chars of "$GPGGA," or similar header, then
+        # 10 ASCII utc, double lat, 1 char N/S, double lon, 1 char E/W.
+        need = prefix_len + 10 + 8 + 1 + 8 + 1
+        if len(body) < need:
+            return {}
+        try:
+            utc = body[prefix_len:prefix_len + 10].decode("ascii", errors="ignore")
+            off = prefix_len + 10
+            lat = struct.unpack_from("<d", body, off)[0]
+            ns = chr(body[off + 8])
+            lon = struct.unpack_from("<d", body, off + 9)[0]
+            ew = chr(body[off + 17])
+        except (struct.error, IndexError):
+            return {}
+        d: dict[str, Any] = {}
+        try:
+            hh = int(utc[0:2]); mm = int(utc[2:4]); ss = float(utc[4:6])
+            d["nav_seconds_utc"] = hh * 3600 + mm * 60 + ss
+        except ValueError:
+            pass
+        if ns == "S":
+            lat = -lat
+        if ew == "W":
+            lon = -lon
+        d["nav_latitude"] = lat
+        d["nav_longitude"] = lon
+        return d
+
+    def _hdt_from_binary(body: bytes, prefix_len: int) -> dict:
+        if len(body) < prefix_len + 8:
+            return {}
+        try:
+            heading = struct.unpack_from("<d", body, prefix_len)[0]
+            return {"nav_heading_true_deg": float(heading)}
+        except struct.error:
+            return {}
+
+    if spec_id == 100:                       # WinRiver II v<2.000 GGA
+        out.update(_gga_from_binary(body, 10))
+    elif spec_id == 104:                     # WinRiver II v>=2.000 GGA
+        out.update(_gga_from_binary(body, 7))
+    elif spec_id == 103 or spec_id == 107:   # HDT (v<2 / v>=2)
+        out.update(_hdt_from_binary(body, 7))
+    elif spec_id == 204:                     # Raw ASCII $..GGA
+        try:
+            text = body.decode("ascii", errors="ignore")
+            out.update(_nmea_gga(text))
+        except Exception:
+            pass
+    # Other specIDs (4/5/101/102/105/106/200/205/206/207) not implemented.
     return out
 
 
@@ -463,6 +581,9 @@ def read_pd0(
         nav_lat: list[float] = []
         nav_lon: list[float] = []
         nav_sec: list[float] = []
+        nav_course: list[float] = []
+        nav_speed: list[float] = []
+        nav_hdt: list[float] = []
         sourceprog = "instrument"
 
         # Rewind to start of first ensemble and iterate.
@@ -532,11 +653,15 @@ def read_pd0(
                     ens_bt_ampl = bt["bt_ampl"]
                     ens_bt_pg = bt["bt_perc_good"]
                 elif bid in (0x2100, 0x2101, 0x2102, 0x2103, 0x2104):
-                    # WinRiver raw NMEA blocks. Read to block end & parse GGA.
+                    # WinRiver v1 raw NMEA blocks (one sentence each).
                     sourceprog = "WINRIVER"
                     payload = fd.read(max(0, payload_end - fd.tell()))
-                    if bid == 0x2101:
-                        ens_nav.update(_nmea_gga(payload))
+                    ens_nav.update(_parse_winriver_nmea(bid, payload))
+                elif bid == 0x2022:
+                    # WinRiver II block (binary or raw NMEA sub-messages).
+                    sourceprog = "WINRIVER2"
+                    payload = fd.read(max(0, payload_end - fd.tell()))
+                    ens_nav.update(_parse_winriver2_block(payload))
                 else:
                     # Unknown / unimplemented: just skip using header offset.
                     pass
@@ -565,6 +690,9 @@ def read_pd0(
             nav_lat.append(ens_nav.get("nav_latitude", np.nan))
             nav_lon.append(ens_nav.get("nav_longitude", np.nan))
             nav_sec.append(ens_nav.get("nav_seconds_utc", np.nan))
+            nav_course.append(ens_nav.get("nav_course_true_deg", np.nan))
+            nav_speed.append(ens_nav.get("nav_speed_kts", np.nan))
+            nav_hdt.append(ens_nav.get("nav_heading_true_deg", np.nan))
 
             ens_count += 1
             if nens is not None and ens_count >= nens:
@@ -667,14 +795,39 @@ def read_pd0(
     ds["roll"].attrs["units"] = "degree"
     ds["soundspeed"].attrs["units"] = "m s-1"
 
-    if sourceprog == "WINRIVER":
+    if sourceprog in ("WINRIVER", "WINRIVER2"):
         ds["nav_latitude"] = ("time", np.array(nav_lat, dtype=np.float32))
         ds["nav_longitude"] = ("time", np.array(nav_lon, dtype=np.float32))
         ds["nav_seconds_utc"] = ("time", np.array(nav_sec, dtype=np.float32))
         ds["nav_latitude"].attrs["units"] = "degree_north"
         ds["nav_longitude"].attrs["units"] = "degree_east"
         ds["nav_seconds_utc"].attrs["long_name"] = (
-            "GPS UTC time-of-day (s) from $GPGGA"
+            "GPS UTC time-of-day (s) from $..GGA"
         )
+        # VTG-derived (WinRiver v1 block 0x2102 only): course over ground +
+        # speed over ground in knots. NaN where the sentence was missing.
+        if np.any(np.isfinite(nav_course)) or np.any(np.isfinite(nav_speed)):
+            ds["nav_course_true"] = (
+                "time", np.array(nav_course, dtype=np.float32)
+            )
+            ds["nav_course_true"].attrs["units"] = "degree"
+            ds["nav_course_true"].attrs["long_name"] = (
+                "course over ground (true) from $..VTG"
+            )
+            ds["nav_speed"] = ("time", np.array(nav_speed, dtype=np.float32))
+            ds["nav_speed"].attrs["units"] = "knot"
+            ds["nav_speed"].attrs["long_name"] = (
+                "speed over ground from $..VTG"
+            )
+        # HDT-derived true heading (WinRiver block 0x2104 or WinRiver2 specID
+        # 103/107). Optional.
+        if np.any(np.isfinite(nav_hdt)):
+            ds["nav_heading_true"] = (
+                "time", np.array(nav_hdt, dtype=np.float32)
+            )
+            ds["nav_heading_true"].attrs["units"] = "degree"
+            ds["nav_heading_true"].attrs["long_name"] = (
+                "true heading from $..HDT"
+            )
 
     return ds
