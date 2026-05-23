@@ -35,4 +35,3 @@ intersphinx_mapping = {
 
 html_theme = "furo"
 html_title = f"py_rdradcp {release}"
-html_static_path = ["_static"]
